@@ -1,0 +1,15 @@
+# Pyroscope configuration for local development
+
+# Target modules to run (all runs single-binary mode)
+target: all
+
+# Server configuration
+server:
+  http_listen_port: 4040
+
+# Storage backend configuration
+storage:
+  backend: filesystem
+  filesystem:
+    dir: /data
+

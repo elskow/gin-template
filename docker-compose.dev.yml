@@ -1,0 +1,161 @@
+services:
+  app:
+    container_name: ${APP_NAME:-go-gin-clean-starter}-app
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - ${APP_PORT:-8080}:8888
+    volumes:
+      - .:/app
+      - /app/docker/air/tmp
+    environment:
+      - APP_ENV=${APP_ENV:-development}
+      - APP_PORT=${APP_PORT:-8080}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - DB_NAME=${DB_NAME}
+      - DB_MAX_OPEN_CONNS=${DB_MAX_OPEN_CONNS:-25}
+      - DB_MAX_IDLE_CONNS=${DB_MAX_IDLE_CONNS:-5}
+      - DB_CONN_MAX_LIFETIME_MIN=${DB_CONN_MAX_LIFETIME_MIN:-0}
+      - DB_CONN_MAX_IDLE_TIME_MIN=${DB_CONN_MAX_IDLE_TIME_MIN:-0}
+      - OTEL_SAMPLING_STRATEGY=always
+      - OTEL_SAMPLING_RATE=1.0
+      - JWT_SECRET=${JWT_SECRET}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=alloy:4318
+      - LOG_BLACKLIST_PATHS=/health,/metrics
+      - ENABLE_STDOUT_LOGS=true
+      - ENABLE_OTLP_LOGS=true
+      - LOG_BUFFER_SIZE=2000
+      - LOG_DROP_ON_FULL=true
+      - ENABLE_PROFILING=true
+      - PYROSCOPE_SERVER_ADDRESS=http://pyroscope:4040
+    networks:
+      - app-network
+    depends_on:
+      - postgres
+      - alloy
+    restart: unless-stopped
+
+  postgres:
+    hostname: postgres
+    container_name: ${APP_NAME:-go-gin-clean-starter}-db
+    image: postgres:latest
+    ports:
+      - ${DB_PORT}:5432
+    volumes:
+      - app-data:/var/lib/postgresql
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASS}
+      - POSTGRES_DB=${DB_NAME}
+    networks:
+      - app-network
+
+  loki:
+    image: grafana/loki:latest
+    container_name: ${APP_NAME:-go-gin-clean-starter}-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./docker/loki/loki-config.yml:/etc/loki/local-config.yaml
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - app-network
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: ${APP_NAME:-go-gin-clean-starter}-tempo
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./docker/tempo/tempo-config.yml:/etc/tempo/config.yaml
+      - tempo-data:/var/tempo
+    command: -config.file=/etc/tempo/config.yaml
+    networks:
+      - app-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ${APP_NAME:-go-gin-clean-starter}-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+      - "--web.enable-remote-write-receiver"
+    networks:
+      - app-network
+
+  alloy:
+    image: grafana/alloy:latest
+    container_name: ${APP_NAME:-go-gin-clean-starter}-alloy
+    ports:
+      - "12345:12345"
+      - "4319:4319"
+    volumes:
+      - ./docker/alloy/config.alloy:/etc/alloy/config.alloy
+    command: run --server.http.listen-addr=0.0.0.0:12345 --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy
+    networks:
+      - app-network
+    depends_on:
+      - tempo
+      - prometheus
+      - loki
+
+  pyroscope:
+    image: grafana/pyroscope:latest
+    container_name: ${APP_NAME:-go-gin-clean-starter}-pyroscope
+    ports:
+      - "4040:4040"
+    command:
+      - "-config.file=/etc/pyroscope/config.yaml"
+    volumes:
+      - ./docker/pyroscope/config.yaml:/etc/pyroscope/config.yaml
+      - pyroscope-data:/data
+    networks:
+      - app-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ${APP_NAME:-go-gin-clean-starter}-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=grafana-pyroscope-app,grafana-exploretraces-app,grafana-metricsdrilldown-app
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
+    networks:
+      - app-network
+    depends_on:
+      - loki
+      - tempo
+      - prometheus
+      - pyroscope
+
+volumes:
+  app-data:
+  loki-data:
+  tempo-data:
+  prometheus-data:
+  grafana-data:
+  pyroscope-data:
+
+networks:
+  app-network:
+    driver: bridge

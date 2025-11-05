@@ -1,0 +1,135 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// ============================================================================
+// TRACES COLLECTION
+// ============================================================================
+
+// Traces collection via OTLP
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  output {
+    traces  = [otelcol.processor.batch.default.input]
+    metrics = [otelcol.processor.attributes.default.input]
+  }
+}
+
+// Batch processor for better performance
+otelcol.processor.batch "default" {
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+// Export traces to Tempo
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls {
+      insecure = true
+    }
+  }
+}
+
+// ============================================================================
+// METRICS COLLECTION
+// ============================================================================
+
+// Add resource attributes processor
+otelcol.processor.attributes "default" {
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input]
+  }
+}
+
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+// Metrics collection from Prometheus /metrics endpoint
+prometheus.scrape "app" {
+  targets = [
+    {"__address__" = "app:8888", "__metrics_path__" = "/metrics"},
+  ]
+  forward_to = [prometheus.remote_write.default.receiver]
+
+  clustering {
+    enabled = true
+  }
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+
+    queue_config {
+      max_shards = 1
+    }
+  }
+}
+
+// ============================================================================
+// LOGS COLLECTION
+// ============================================================================
+
+// Receive logs via OTLP HTTP
+otelcol.receiver.otlp "logs" {
+  http {
+    endpoint = "0.0.0.0:4319"
+  }
+
+  output {
+    logs = [otelcol.processor.attributes.logs.input]
+  }
+}
+
+// Process log attributes and configure Loki labels
+otelcol.processor.attributes "logs" {
+  action {
+    key = "loki.format"
+    value = "json"
+    action = "insert"
+  }
+
+  action {
+    key = "loki.attribute.labels"
+    value = "service.name, level, method, path, status"
+    action = "insert"
+  }
+
+  action {
+    key = "loki.resource.labels"
+    value = "service.name, service.instance.id"
+    action = "insert"
+  }
+
+  output {
+    logs = [otelcol.exporter.loki.default.input]
+  }
+}
+
+// Export logs to Loki
+otelcol.exporter.loki "default" {
+  forward_to = [loki.write.loki.receiver]
+}
+
+// Write logs to Loki
+loki.write "loki" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+
+  external_labels = {
+    cluster = "dev",
+    environment = "development",
+  }
+}
